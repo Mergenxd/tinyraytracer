@@ -1,3 +1,4 @@
-mod vec3;
+pub mod ray;
+pub mod vec3;
 
-type Scalar = f32;
+pub type Scalar = f32;

@@ -1,6 +1,6 @@
 use crate::*;
 
-use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg};
+use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub};
 
 #[derive(Clone, Copy)]
 pub struct Vector3 {
@@ -10,8 +10,12 @@ pub struct Vector3 {
 }
 
 impl Vector3 {
-    pub fn new(x: Scalar, y: Scalar, z: Scalar) -> Vector3 {
-        Vector3 { x, y, z }
+    pub fn new(scalar: Scalar) -> Vector3 {
+        Vector3 {
+            x: scalar,
+            y: scalar,
+            z: scalar,
+        }
     }
 
     pub fn length(self: &Self) -> Scalar {
@@ -50,6 +54,17 @@ impl Add for Vector3 {
     }
 }
 
+impl Sub for Vector3 {
+    type Output = Vector3;
+    fn sub(self, rhs: Self) -> Self::Output {
+        Vector3 {
+            x: self.x - rhs.x,
+            y: self.y - rhs.y,
+            z: self.z - rhs.z,
+        }
+    }
+}
+
 impl Neg for Vector3 {
     type Output = Vector3;
     fn neg(self) -> Self::Output {
@@ -61,13 +76,24 @@ impl Neg for Vector3 {
     }
 }
 
-impl Mul for Vector3 {
+impl Mul<Vector3> for Vector3 {
     type Output = Vector3;
     fn mul(self, rhs: Self) -> Self::Output {
         Vector3 {
             x: self.x * rhs.x,
             y: self.y * rhs.y,
             z: self.z * rhs.z,
+        }
+    }
+}
+
+impl Mul<Scalar> for Vector3 {
+    type Output = Vector3;
+    fn mul(self, rhs: Scalar) -> Self::Output {
+        Vector3 {
+            x: self.x * rhs,
+            y: self.y * rhs,
+            z: self.z * rhs,
         }
     }
 }
