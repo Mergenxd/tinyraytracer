@@ -1,9 +1,11 @@
+use rand::Rng;
+use std::io::Write;
 use std::path::Path;
 use std::sync;
 use std::thread;
 
-use tinyraytracer::camera::ASPECT_RATIO;
 use tinyraytracer::camera::Camera;
+use tinyraytracer::camera::ASPECT_RATIO;
 use tinyraytracer::shape::hittable::HitRecord;
 use tinyraytracer::{
     ray::Ray,
@@ -14,6 +16,7 @@ use tinyraytracer::{
 
 const IMAGE_WIDTH: u32 = 400;
 const IMAGE_HEIGHT: u32 = (IMAGE_WIDTH as Scalar / ASPECT_RATIO) as u32;
+const SAMPLES_PER_PIXEL: usize = 10;
 
 const SAVE_PATH: &str = "image.png";
 
@@ -105,22 +108,31 @@ fn main() {
 
     let mut x: usize = 0;
     let mut y: usize = 0;
+    let mut num_sampled: usize = 0;
+
+    let mut rng = rand::thread_rng();
 
     /* Send first ray to workers */
     println!("Sending rays");
     for worker in &mut workers {
         worker.pixel_position = (x, y);
-        let u = x as Scalar / (IMAGE_WIDTH - 1) as Scalar;
-        let v = ((IMAGE_HEIGHT - 1) - y as u32) as Scalar / (IMAGE_HEIGHT - 1) as Scalar;
+        let u = ((x as Scalar) + rng.gen_range(0.0..1.0)) / (IMAGE_WIDTH - 1) as Scalar;
+        let v = ((((IMAGE_HEIGHT - 1) - y as u32) as Scalar) + rng.gen_range(0.0..1.0))
+            / (IMAGE_HEIGHT - 1) as Scalar;
 
         let ray = camera.get_ray(u, v);
 
         worker.tx.send(ray).unwrap();
 
-        x += 1;
-        if x >= IMAGE_WIDTH as usize {
-            x = 0;
-            y += 1;
+        num_sampled += 1;
+
+        if num_sampled >= SAMPLES_PER_PIXEL {
+            num_sampled = 0;
+            x += 1;
+            if x >= IMAGE_WIDTH as usize {
+                x = 0;
+                y += 1;
+            }
         }
     }
 
@@ -128,7 +140,7 @@ fn main() {
         /* Main loop */
         for worker in &mut workers {
             if let Ok(pixel_color) = worker.rx.try_recv() {
-                buffer[worker.pixel_position.1][worker.pixel_position.0] = pixel_color;
+                buffer[worker.pixel_position.1][worker.pixel_position.0] += pixel_color;
 
                 if y < IMAGE_HEIGHT as usize {
                     worker.pixel_position = (x, y);
@@ -141,10 +153,20 @@ fn main() {
 
                     worker.tx.send(ray).unwrap();
 
-                    x += 1;
-                    if x >= IMAGE_WIDTH as usize {
-                        x = 0;
-                        y += 1;
+                    num_sampled += 1;
+
+                    if num_sampled > SAMPLES_PER_PIXEL {
+                        num_sampled = 0;
+
+                        x += 1;
+                        if x >= IMAGE_WIDTH as usize {
+                            x = 0;
+                            y += 1;
+
+                            /* Update message */
+                            print!("\rProcessing: {:.2}%", (y as Scalar) / IMAGE_HEIGHT as Scalar * 100.0);
+                            std::io::stdout().flush().unwrap();
+                        }
                     }
                 } else {
                     worker.status = false;
@@ -152,7 +174,7 @@ fn main() {
             }
         }
     }
-    println!("Done");
+    println!("\nDone");
 
     /*
     for y in 0..buffer.len() {
@@ -175,6 +197,7 @@ fn main() {
 
     for y in 0usize..IMAGE_HEIGHT as usize {
         for x in 0usize..IMAGE_WIDTH as usize {
+            buffer[y][x] *= 1.0 / SAMPLES_PER_PIXEL as Scalar;
             image_buffer[(y * IMAGE_WIDTH as usize + x) * 3] =
                 (buffer[y][x].x * 255.999).clamp(0.0, 255.0) as u8;
             image_buffer[(y * IMAGE_WIDTH as usize + x) * 3 + 1] =
