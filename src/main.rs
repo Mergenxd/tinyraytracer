@@ -2,9 +2,16 @@ use std::path::Path;
 use std::sync;
 use std::thread;
 
-use tinyraytracer::{ray::Ray, vec3::Vector3, Scalar};
+use tinyraytracer::camera::ASPECT_RATIO;
+use tinyraytracer::camera::Camera;
+use tinyraytracer::shape::hittable::HitRecord;
+use tinyraytracer::{
+    ray::Ray,
+    shape::{hittable::Hittable, hittable_list::HittableList, sphere::Sphere},
+    vec3::Vector3,
+    Scalar,
+};
 
-const ASPECT_RATIO: Scalar = 16.0 / 9.0;
 const IMAGE_WIDTH: u32 = 400;
 const IMAGE_HEIGHT: u32 = (IMAGE_WIDTH as Scalar / ASPECT_RATIO) as u32;
 
@@ -12,30 +19,10 @@ const SAVE_PATH: &str = "image.png";
 
 const NUM_THREADS: usize = 4;
 
-fn hit_sphere(center: &Vector3, radius: Scalar, ray: &Ray) -> Scalar {
-    let oc = ray.origin - (*center);
-    let a = ray.direction.length_squared();
-    let half_b = oc.dot(&ray.direction);
-    let c = oc.length_squared() - radius * radius;
-    let discriminant = half_b * half_b - a * c;
-
-    if discriminant < 0.0 {
-        -1.0
-    } else {
-        (-half_b - discriminant.sqrt()) / a
-    }
-}
-
-fn send_ray(ray: &Ray) -> Vector3 {
-    let sphere_center = Vector3 {
-        x: 0.0,
-        y: 0.0,
-        z: -1.0,
-    };
-    let t = hit_sphere(&sphere_center, 0.5, &ray);
-    if t > 0.0 {
-        let normal = (ray.at(t) - sphere_center).unit_vector() + Vector3::new(1.0);
-        return normal * 0.5;
+fn send_ray(ray: &Ray, world: &HittableList) -> Vector3 {
+    let mut rec = HitRecord::new();
+    if world.hit(&ray, 0.0, f32::INFINITY, &mut rec) {
+        return (rec.normal + Vector3::new(1.0)) * 0.5;
     }
 
     let unit_direction = ray.direction.unit_vector();
@@ -58,28 +45,10 @@ fn send_ray(ray: &Ray) -> Vector3 {
 fn main() {
     let mut buffer = vec![[Vector3::new(0.0); IMAGE_WIDTH as usize]; IMAGE_HEIGHT as usize];
 
-    let viewport_height: Scalar = 2.0;
-    let viewport_width: Scalar = viewport_height * ASPECT_RATIO;
-    let focal_length: Scalar = 1.0;
-    let origin: Vector3 = Vector3::new(0.0);
-    let horizontal: Vector3 = Vector3 {
-        x: viewport_width,
-        y: 0.0,
-        z: 0.0,
-    };
-    let vertical: Vector3 = Vector3 {
-        x: 0.0,
-        y: viewport_height,
-        z: 0.0,
-    };
-    let lower_left_corner = origin
-        - horizontal / 2.0
-        - vertical / 2.0
-        - Vector3 {
-            x: 0.0,
-            y: 0.0,
-            z: focal_length,
-        };
+    /* Camera stuff */
+    let camera = Camera::new();
+
+    /* World */
 
     struct Worker {
         pixel_position: (usize, usize),
@@ -89,10 +58,7 @@ fn main() {
     }
 
     impl Worker {
-        fn new(
-            tx: sync::mpsc::Sender<Ray>,
-            rx: sync::mpsc::Receiver<Vector3>,
-        ) -> Self {
+        fn new(tx: sync::mpsc::Sender<Ray>, rx: sync::mpsc::Receiver<Vector3>) -> Self {
             Worker {
                 pixel_position: (0, 0),
                 tx,
@@ -108,19 +74,33 @@ fn main() {
     for _ in 0..NUM_THREADS {
         let (tx_ray, rx_ray) = sync::mpsc::channel::<Ray>();
         let (tx_color, rx_color) = sync::mpsc::channel::<Vector3>();
-        let worker = Worker::new(
-            tx_ray,
-            rx_color,
-        );
+        let worker = Worker::new(tx_ray, rx_color);
 
         workers.push(worker);
-
         threads.push(thread::spawn(move || {
-                while let Ok(ray) = rx_ray.recv() {
-                    let pixel_color = send_ray(&ray);
-                    tx_color.send(pixel_color).unwrap();
-                }
-            }));
+            let mut world = HittableList::new();
+            world.add(Box::new(Sphere::new(
+                Vector3 {
+                    x: 0.0,
+                    y: 0.0,
+                    z: -1.0,
+                },
+                0.5,
+            )));
+            world.add(Box::new(Sphere::new(
+                Vector3 {
+                    x: 0.0,
+                    y: -100.5,
+                    z: -1.0,
+                },
+                100.0,
+            )));
+
+            while let Ok(ray) = rx_ray.recv() {
+                let pixel_color = send_ray(&ray, &world);
+                tx_color.send(pixel_color).unwrap();
+            }
+        }));
     }
 
     let mut x: usize = 0;
@@ -133,10 +113,7 @@ fn main() {
         let u = x as Scalar / (IMAGE_WIDTH - 1) as Scalar;
         let v = ((IMAGE_HEIGHT - 1) - y as u32) as Scalar / (IMAGE_HEIGHT - 1) as Scalar;
 
-        let ray = Ray::new(
-            origin,
-            lower_left_corner + (horizontal * u) + (vertical * v) - origin,
-        );
+        let ray = camera.get_ray(u, v);
 
         worker.tx.send(ray).unwrap();
 
@@ -146,7 +123,6 @@ fn main() {
             y += 1;
         }
     }
-
 
     while workers.iter().any(|w| w.status == true) {
         /* Main loop */
@@ -158,12 +134,10 @@ fn main() {
                     worker.pixel_position = (x, y);
 
                     let u = x as Scalar / (IMAGE_WIDTH - 1) as Scalar;
-                    let v = ((IMAGE_HEIGHT - 1) - y as u32) as Scalar / (IMAGE_HEIGHT - 1) as Scalar;
+                    let v =
+                        ((IMAGE_HEIGHT - 1) - y as u32) as Scalar / (IMAGE_HEIGHT - 1) as Scalar;
 
-                    let ray = Ray::new(
-                        origin,
-                        lower_left_corner + (horizontal * u) + (vertical * v) - origin,
-                    );
+                    let ray = camera.get_ray(u, v);
 
                     worker.tx.send(ray).unwrap();
 
