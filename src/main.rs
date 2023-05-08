@@ -14,18 +14,31 @@ use tinyraytracer::{
     Scalar,
 };
 
-const IMAGE_WIDTH: u32 = 400;
+const IMAGE_WIDTH: u32 = 600;
 const IMAGE_HEIGHT: u32 = (IMAGE_WIDTH as Scalar / ASPECT_RATIO) as u32;
-const SAMPLES_PER_PIXEL: usize = 10;
+const MAX_DEPTH: u32 = 50;
+const SAMPLES_PER_PIXEL: usize = 100;
 
 const SAVE_PATH: &str = "image.png";
 
 const NUM_THREADS: usize = 4;
 
-fn send_ray(ray: &Ray, world: &HittableList) -> Vector3 {
+fn send_ray(ray: &Ray, world: &HittableList, depth: u32) -> Vector3 {
+    if depth <= 0 {
+        return Vector3::new(0.0);
+    }
+
     let mut rec = HitRecord::new();
-    if world.hit(&ray, 0.0, f32::INFINITY, &mut rec) {
-        return (rec.normal + Vector3::new(1.0)) * 0.5;
+    if world.hit(&ray, 0.0, Scalar::INFINITY, &mut rec) {
+        let target = rec.point + Vector3::random_in_hemisphere(&rec.normal);
+        return send_ray(
+            &Ray {
+                origin: rec.point,
+                direction: target - rec.point,
+            },
+            world,
+            depth - 1,
+        ) * 0.5;
     }
 
     let unit_direction = ray.direction.unit_vector();
@@ -110,7 +123,7 @@ fn main() {
                         / (IMAGE_HEIGHT - 1) as Scalar;
 
                     let ray = camera.get_ray(u, v);
-                    pixel_color += send_ray(&ray, &world);
+                    pixel_color += send_ray(&ray, &world, MAX_DEPTH);
                 }
 
                 tx_color.send(pixel_color).unwrap();
@@ -187,7 +200,14 @@ fn main() {
 
     for y in 0usize..IMAGE_HEIGHT as usize {
         for x in 0usize..IMAGE_WIDTH as usize {
-            buffer[y][x] *= 1.0 / SAMPLES_PER_PIXEL as Scalar;
+            //buffer[y][x] *= 1.0 / SAMPLES_PER_PIXEL as Scalar;
+            let scale = 1.0 / SAMPLES_PER_PIXEL as Scalar;
+            buffer[y][x] = Vector3 {
+                x: (buffer[y][x].x * scale).sqrt(),
+                y: (buffer[y][x].y * scale).sqrt(),
+                z: (buffer[y][x].z * scale).sqrt(),
+            };
+
             image_buffer[(y * IMAGE_WIDTH as usize + x) * 3] =
                 (buffer[y][x].x * 255.999).clamp(0.0, 255.0) as u8;
             image_buffer[(y * IMAGE_WIDTH as usize + x) * 3 + 1] =

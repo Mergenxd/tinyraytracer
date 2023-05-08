@@ -41,6 +41,38 @@ impl Vector3 {
     pub fn unit_vector(self: &Self) -> Vector3 {
         *self / self.length()
     }
+
+    pub fn random(min: Scalar, max: Scalar) -> Vector3 {
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
+        Vector3 {
+            x: rng.gen_range(min..max),
+            y: rng.gen_range(min..max),
+            z: rng.gen_range(min..max),
+        }
+    }
+
+    pub fn random_in_unit_sphere() -> Vector3 {
+        let mut point = Self::random(-1.0, 1.0);
+        while point.length_squared() >= 1.0 {
+            point = Self::random(-1.0, 1.0);
+        }
+
+        point
+    }
+
+    pub fn random_unit_vector() -> Vector3 {
+        Vector3::unit_vector(&Vector3::random_in_unit_sphere())
+    }
+
+    pub fn random_in_hemisphere(normal: &Vector3) -> Vector3 {
+        let in_unit_sphere = Vector3::random_in_unit_sphere();
+        if in_unit_sphere.dot(normal) > 0.0 {
+            in_unit_sphere
+        } else {
+            -in_unit_sphere
+        }
+    }
 }
 
 impl Add for Vector3 {
