@@ -55,13 +55,13 @@ fn main() {
 
     struct Worker {
         pixel_position: (usize, usize),
-        tx: sync::mpsc::Sender<Ray>,
+        tx: sync::mpsc::Sender<(usize, usize)>,
         rx: sync::mpsc::Receiver<Vector3>,
         status: bool,
     }
 
     impl Worker {
-        fn new(tx: sync::mpsc::Sender<Ray>, rx: sync::mpsc::Receiver<Vector3>) -> Self {
+        fn new(tx: sync::mpsc::Sender<(usize, usize)>, rx: sync::mpsc::Receiver<Vector3>) -> Self {
             Worker {
                 pixel_position: (0, 0),
                 tx,
@@ -75,7 +75,7 @@ fn main() {
     let mut workers = Vec::new();
     let mut threads = Vec::new();
     for _ in 0..NUM_THREADS {
-        let (tx_ray, rx_ray) = sync::mpsc::channel::<Ray>();
+        let (tx_ray, rx_ray) = sync::mpsc::channel::<(usize, usize)>();
         let (tx_color, rx_color) = sync::mpsc::channel::<Vector3>();
         let worker = Worker::new(tx_ray, rx_color);
 
@@ -99,8 +99,20 @@ fn main() {
                 100.0,
             )));
 
-            while let Ok(ray) = rx_ray.recv() {
-                let pixel_color = send_ray(&ray, &world);
+            let mut rng = rand::thread_rng();
+
+            while let Ok((x, y)) = rx_ray.recv() {
+                let mut pixel_color = Vector3::new(0.0);
+
+                for _ in 0..SAMPLES_PER_PIXEL {
+                    let u = ((x as Scalar) + rng.gen_range(0.0..1.0)) / (IMAGE_WIDTH - 1) as Scalar;
+                    let v = ((((IMAGE_HEIGHT - 1) - y as u32) as Scalar) + rng.gen_range(0.0..1.0))
+                        / (IMAGE_HEIGHT - 1) as Scalar;
+
+                    let ray = camera.get_ray(u, v);
+                    pixel_color += send_ray(&ray, &world);
+                }
+
                 tx_color.send(pixel_color).unwrap();
             }
         }));
@@ -108,31 +120,18 @@ fn main() {
 
     let mut x: usize = 0;
     let mut y: usize = 0;
-    let mut num_sampled: usize = 0;
-
-    let mut rng = rand::thread_rng();
 
     /* Send first ray to workers */
     println!("Sending rays");
     for worker in &mut workers {
         worker.pixel_position = (x, y);
-        let u = ((x as Scalar) + rng.gen_range(0.0..1.0)) / (IMAGE_WIDTH - 1) as Scalar;
-        let v = ((((IMAGE_HEIGHT - 1) - y as u32) as Scalar) + rng.gen_range(0.0..1.0))
-            / (IMAGE_HEIGHT - 1) as Scalar;
 
-        let ray = camera.get_ray(u, v);
+        worker.tx.send((x, y)).unwrap();
 
-        worker.tx.send(ray).unwrap();
-
-        num_sampled += 1;
-
-        if num_sampled >= SAMPLES_PER_PIXEL {
-            num_sampled = 0;
-            x += 1;
-            if x >= IMAGE_WIDTH as usize {
-                x = 0;
-                y += 1;
-            }
+        x += 1;
+        if x >= IMAGE_WIDTH as usize {
+            x = 0;
+            y += 1;
         }
     }
 
@@ -145,28 +144,19 @@ fn main() {
                 if y < IMAGE_HEIGHT as usize {
                     worker.pixel_position = (x, y);
 
-                    let u = x as Scalar / (IMAGE_WIDTH - 1) as Scalar;
-                    let v =
-                        ((IMAGE_HEIGHT - 1) - y as u32) as Scalar / (IMAGE_HEIGHT - 1) as Scalar;
+                    worker.tx.send((x, y)).unwrap();
 
-                    let ray = camera.get_ray(u, v);
+                    x += 1;
+                    if x >= IMAGE_WIDTH as usize {
+                        x = 0;
+                        y += 1;
 
-                    worker.tx.send(ray).unwrap();
-
-                    num_sampled += 1;
-
-                    if num_sampled > SAMPLES_PER_PIXEL {
-                        num_sampled = 0;
-
-                        x += 1;
-                        if x >= IMAGE_WIDTH as usize {
-                            x = 0;
-                            y += 1;
-
-                            /* Update message */
-                            print!("\rProcessing: {:.2}%", (y as Scalar) / IMAGE_HEIGHT as Scalar * 100.0);
-                            std::io::stdout().flush().unwrap();
-                        }
+                        /* Update message */
+                        print!(
+                            "\rProcessing: {:.2}%",
+                            (y as Scalar) / IMAGE_HEIGHT as Scalar * 100.0
+                        );
+                        std::io::stdout().flush().unwrap();
                     }
                 } else {
                     worker.status = false;
